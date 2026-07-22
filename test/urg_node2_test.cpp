@@ -173,6 +173,12 @@ TEST(UTM_30_LX_EW, normal_scan) {
   EXPECT_EQ((int)ep_most.size(), 0);
   EXPECT_EQ((int)ep_diag.size(), 0);
 
+  // "scan" topic の offer QoS が SAM の liveliness 監視レイヤと整合しているか確認する
+  ASSERT_EQ((int)ep_scan.size(), 1);
+  rclcpp::QoS scan_qos = ep_scan[0].qos_profile();
+  EXPECT_EQ(scan_qos.liveliness(), rclcpp::LivelinessPolicy::Automatic);
+  EXPECT_EQ(scan_qos.liveliness_lease_duration(), rclcpp::Duration::from_seconds(2.0));
+
   // scan wait for 10sec
   scan_wait(exe1, 10.0);
 
