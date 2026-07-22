@@ -77,7 +77,11 @@ UrgNode2::CallbackReturn UrgNode2::on_configure(const rclcpp_lifecycle::State & 
   if (use_multiecho_) {
     echo_pub_ = std::make_unique<laser_proc::LaserPublisher>(get_node_topics_interface(), 20);
   } else {
-    scan_pub_ = create_publisher<sensor_msgs::msg::LaserScan>("scan", rclcpp::QoS(20));
+    auto scan_qos = rclcpp::QoS(20);
+    // SAMのliveliness監視レイヤ用に有限2.0s leaseをofferする（ADR 006 Phase 6-e）
+    scan_qos.liveliness(RMW_QOS_POLICY_LIVELINESS_AUTOMATIC);
+    scan_qos.liveliness_lease_duration(rclcpp::Duration::from_seconds(2.0));
+    scan_pub_ = create_publisher<sensor_msgs::msg::LaserScan>("scan", scan_qos);
   }
 
   // スレッド起動
