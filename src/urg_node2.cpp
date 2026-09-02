@@ -86,10 +86,13 @@ urg_measurement_type_t UrgNode2::on_urg_error(const char * status, void * urg)
     rclcpp::Time now = node->get_clock()->now();
     int64_t now_ns = now.nanoseconds();
     int64_t last_ns = node->last_urg_error_log_time_ns_.load(std::memory_order_relaxed);
-    // ROS時刻が巻き戻る（use_sim_time・時刻同期補正等）と差分が負になり、時刻が
-    // 追いつくまで診断ログが出なくなる。巻き戻りを検知した場合は即座に出力して
+    // 初回は時刻によらず必ず出力する（use_sim_timeで/clock未受信の間はnow()が0を
+    // 返し、時刻差では初回を判定できないため）。
+    // またROS時刻が巻き戻る（use_sim_time・時刻同期補正等）と差分が負になり、時刻が
+    // 追いつくまで診断ログが出なくなる。巻き戻りを検知した場合も即座に出力して
     // 抑制状態をリセットする
-    if (now_ns < last_ns || now_ns - last_ns >= kUrgErrorLogIntervalNs) {
+    bool first = !node->urg_error_logged_once_.exchange(true, std::memory_order_relaxed);
+    if (first || now_ns < last_ns || now_ns - last_ns >= kUrgErrorLogIntervalNs) {
       node->last_urg_error_log_time_ns_.store(now_ns, std::memory_order_relaxed);
       RCLCPP_WARN(
         node->get_logger(), "Rejected SCIP status from LiDAR: \"%s\"",
@@ -494,10 +497,10 @@ void UrgNode2::disconnect()
   if (is_connected_) {
     urg_close(&urg_);
     is_connected_ = false;
-    // connect()の対称処理として登録解除。disconnect()はスキャンスレッド自身からのみ
-    // 同期的に呼ばれる（reconnect()はdisconnect()直後にconnect()を呼ぶのみで、その
-    // 間に他スレッドがurg_を参照することはない）ため、ここで解除してもreconnect()中の
-    // ログ取りこぼしにはならない
+    // connect()の対称処理として登録解除。呼び出し元は reconnect() 経由の
+    // スキャンスレッド自身か、on_cleanup/on_shutdown/on_error からの
+    // stop_thread()（スキャンスレッド join 済み）後のいずれかで、どちらの場合も
+    // 解除中に他スレッドがurg_を参照することはないため、ログ取りこぼしにはならない
     unregister_error_handler_map(&urg_);
   }
 }

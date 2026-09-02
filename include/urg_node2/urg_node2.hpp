@@ -384,6 +384,13 @@ private:
   int reconnect_count_;
 
   /**
+   * on_urg_error()の初回出力済みフラグ（インスタンス単位）。
+   * use_sim_timeで/clock未受信の間はnow()が0を返すため、時刻差では初回を
+   * 判定できない。初回だけは時刻によらず必ず出力する
+   */
+  std::atomic<bool> urg_error_logged_once_{false};
+
+  /**
    * on_urg_error()のログ抑制用、直近出力時刻[ns]（インスタンス単位）。
    * スキャンスレッドから読み書きされるためstd::atomicで保護する。rclcpp::Timeは
    * トリビアルにアトミックにできないためint64_tのナノ秒値で保持する
