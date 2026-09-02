@@ -20,6 +20,7 @@
 #ifndef URG_NODE2_URG_NODE2_HPP_
 #define URG_NODE2_URG_NODE2_HPP_
 
+#include <atomic>
 #include <chrono>
 #include <string>
 #include <sstream>
@@ -141,6 +142,39 @@ private:
    * @retval false 接続失敗
    */
   bool connect(void);
+
+  /**
+   * @brief urg_libraryエラーハンドラ
+   * @details receive_data()が応答を不正と判定した際にurg_libraryから呼び出される。
+   *          urg_open()毎にハンドラ登録がクリアされるため、urg_t単位でインスタンスを
+   *          引けるようにしている（C関数ポインタはthisを束縛できないため）
+   * @param[in] status LiDARが返した生のSCIPステータス文字列（NUL終端は保証されない前提で扱う）
+   * @param[in] urg ハンドラ登録先のurg_t（void*で渡ってくる）
+   * @return 呼び出し元(urg_sensor.c receive_data())ではtypeに代入された後、
+   *         後続の分岐が全てコメントアウトされ参照されない。戻り値によらず
+   *         ignore_receive_data_with_qt()+URG_INVALID_RESPONSEへ無条件に進むため、
+   *         どの値を返しても制御フローへの影響はない。URG_UNKNOWNを返す
+   */
+  static urg_measurement_type_t on_urg_error(const char * status, void * urg);
+
+  /**
+   * @brief urg_t→UrgNode2の対応登録
+   * @details on_urg_error()がC関数ポインタ経由で呼ばれた際にthisを復元するために使う。
+   *          connect()成功の都度（reconnect()経由も含め）呼び直す必要がある
+   * @param[in] urg 対応付けるurg_t
+   * @param[in] node 対応付けるUrgNode2インスタンス
+   */
+  static void register_error_handler_map(urg_t * urg, UrgNode2 * node);
+
+  /**
+   * @brief urg_t→UrgNode2の対応解除
+   * @details register_error_handler_map()で登録したエントリを消す。エントリが
+   *          破棄済みインスタンスを指したまま残るとダングリングポインタになるため、
+   *          スキャンスレッドがurg_を参照し得なくなった後（disconnect()直後、および
+   *          デストラクタでのstop_thread()後）に呼ぶ
+   * @param[in] urg 解除対象のurg_t
+   */
+  static void unregister_error_handler_map(urg_t * urg);
 
   /**
    * @brief スキャン設定
@@ -348,6 +382,20 @@ private:
   int total_error_count_;
   /** 再接続カウンタ（Active&Inactive時） */
   int reconnect_count_;
+
+  /**
+   * on_urg_error()の初回出力済みフラグ（インスタンス単位）。
+   * use_sim_timeで/clock未受信の間はnow()が0を返すため、時刻差では初回を
+   * 判定できない。初回だけは時刻によらず必ず出力する
+   */
+  std::atomic<bool> urg_error_logged_once_{false};
+
+  /**
+   * on_urg_error()のログ抑制用、直近出力時刻[ns]（インスタンス単位）。
+   * スキャンスレッドから読み書きされるためstd::atomicで保護する。rclcpp::Timeは
+   * トリビアルにアトミックにできないためint64_tのナノ秒値で保持する
+   */
+  std::atomic<int64_t> last_urg_error_log_time_ns_{0};
 
   /** LiDAR接続状態 */
   bool is_connected_;

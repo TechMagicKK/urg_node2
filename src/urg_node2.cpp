@@ -14,8 +14,96 @@
 
 #include "urg_node2/urg_node2.hpp"
 
+#include <cctype>
+#include <mutex>
+#include <unordered_map>
+
 namespace urg_node2
 {
+
+namespace
+{
+// urg_error_handlerはC関数ポインタでありthisを束縛できないため、urg_tのアドレスから
+// 対応するUrgNode2インスタンスを引けるようにする。プロセス内で複数urg_tが存在しうる
+// 構成（コンポーネントとして複数ロードされる場合等）に備え、urg_t単位のマップにして
+// いる。エントリはconnect()で登録し、disconnect()直後および破棄時（stop_thread()で
+// スキャンスレッド停止後）に解除することで、破棄済みインスタンスを指したまま残る
+// ダングリングエントリを防いでいる
+std::mutex g_error_handler_map_mutex;
+std::unordered_map<const urg_t *, UrgNode2 *> g_error_handler_map;
+
+// statusはBUFFER_SIZE(72byte)内でNUL終端される実装だが、ライブラリ内部実装に
+// 依存しない安全側の扱いとして固定長までしか読まず非表示文字は置換する
+std::string sanitize_status(const char * status)
+{
+  constexpr size_t kMaxLen = 71;  // urg_libraryのBUFFER_SIZE-1
+  std::string result;
+  if (status == nullptr) {
+    return result;
+  }
+  for (size_t i = 0; i < kMaxLen && status[i] != '\0'; ++i) {
+    unsigned char c = static_cast<unsigned char>(status[i]);
+    result.push_back(std::isprint(c) ? static_cast<char>(c) : '.');
+  }
+  return result;
+}
+
+// on_urg_error()のログ抑制間隔[ns]
+constexpr int64_t kUrgErrorLogIntervalNs = 500'000'000;
+}  // namespace
+
+void UrgNode2::register_error_handler_map(urg_t * urg, UrgNode2 * node)
+{
+  std::lock_guard<std::mutex> lock(g_error_handler_map_mutex);
+  g_error_handler_map[urg] = node;
+}
+
+void UrgNode2::unregister_error_handler_map(urg_t * urg)
+{
+  std::lock_guard<std::mutex> lock(g_error_handler_map_mutex);
+  g_error_handler_map.erase(urg);
+}
+
+// urg_libraryが不正応答と判定した際のSCIPステータス文字列をログへ残す。
+// パケットキャプチャなしで切り詰め応答の内容を特定するための調査用フック
+urg_measurement_type_t UrgNode2::on_urg_error(const char * status, void * urg)
+{
+  UrgNode2 * node = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_error_handler_map_mutex);
+    auto it = g_error_handler_map.find(static_cast<const urg_t *>(urg));
+    if (it != g_error_handler_map.end()) {
+      node = it->second;
+    }
+  }
+  if (node != nullptr) {
+    // 出力バーストによるログ洪水対策（過去に2635回連続再接続の実績あり）。
+    // 1台につき最大2Hzで十分（1スキャン周期~29msよりはるかに疎）。
+    // RCLCPP_WARN_THROTTLEは呼び出し箇所単位のstaticを使うため、on_urg_error()が
+    // 全インスタンス共有の単一static関数である本ケースではプロセス内の全urg_tで
+    // 抑制状態が共有されてしまう。インスタンス単位に抑制するためnode->に保持した
+    // 直近出力時刻と比較する方式にしている
+    rclcpp::Time now = node->get_clock()->now();
+    int64_t now_ns = now.nanoseconds();
+    int64_t last_ns = node->last_urg_error_log_time_ns_.load(std::memory_order_relaxed);
+    // 初回は時刻によらず必ず出力する（use_sim_timeで/clock未受信の間はnow()が0を
+    // 返し、時刻差では初回を判定できないため）。
+    // またROS時刻が巻き戻る（use_sim_time・時刻同期補正等）と差分が負になり、時刻が
+    // 追いつくまで診断ログが出なくなる。巻き戻りを検知した場合も即座に出力して
+    // 抑制状態をリセットする
+    bool first = !node->urg_error_logged_once_.exchange(true, std::memory_order_relaxed);
+    if (first || now_ns < last_ns || now_ns - last_ns >= kUrgErrorLogIntervalNs) {
+      node->last_urg_error_log_time_ns_.store(now_ns, std::memory_order_relaxed);
+      RCLCPP_WARN(
+        node->get_logger(), "Rejected SCIP status from LiDAR: \"%s\"",
+        sanitize_status(status).c_str());
+    }
+  }
+  // 呼び出し元(receive_data())では戻り値代入後の分岐が全てコメントアウトされ
+  // 参照されない。無条件にignore_receive_data_with_qt()+URG_INVALID_RESPONSEへ
+  // 進むため、戻り値は制御フローに影響しない
+  return URG_UNKNOWN;
+}
 
 UrgNode2::UrgNode2(const rclcpp::NodeOptions & node_options)
 : rclcpp_lifecycle::LifecycleNode("urg_node2", node_options),
@@ -58,8 +146,13 @@ UrgNode2::UrgNode2(const rclcpp::NodeOptions & node_options)
 // デストラクタ
 UrgNode2::~UrgNode2()
 {
-  // スレッドの停止
+  // スレッドの停止（joinによりon_urg_error()が以後urg_を参照し得ないことを保証する）
   stop_thread();
+
+  // エラーハンドラマップからの登録解除。on_cleanup/on_shutdown/on_error等の
+  // ライフサイクル遷移を経ずに直接破棄された場合でも、デストラクタは必ず通るため
+  // ここで解除しないとダングリングポインタが残り得る
+  unregister_error_handler_map(&urg_);
 }
 
 // onConfigure
@@ -269,6 +362,11 @@ bool UrgNode2::connect()
 
   is_connected_ = true;
 
+  // urg_open()内のurg_t_initialize()でerror_handlerがNULLに戻されるため、
+  // reconnect()経由も含めconnect()成功の都度ここで登録し直す必要がある
+  register_error_handler_map(&urg_, this);
+  urg_set_error_handler(&urg_, &UrgNode2::on_urg_error);
+
   std::stringstream ss;
   ss << "Connected to a ";
   if (!ip_address_.empty()) {
@@ -399,6 +497,11 @@ void UrgNode2::disconnect()
   if (is_connected_) {
     urg_close(&urg_);
     is_connected_ = false;
+    // connect()の対称処理として登録解除。呼び出し元は reconnect() 経由の
+    // スキャンスレッド自身か、on_cleanup/on_shutdown/on_error からの
+    // stop_thread()（スキャンスレッド join 済み）後のいずれかで、どちらの場合も
+    // 解除中に他スレッドがurg_を参照することはないため、ログ取りこぼしにはならない
+    unregister_error_handler_map(&urg_);
   }
 }
 
@@ -485,7 +588,9 @@ void UrgNode2::scan_thread()
             echo_freq_->tick();
           }
         } else {
-          RCLCPP_WARN(get_logger(), "Could not get multi echo scan.");
+          RCLCPP_WARN(
+            get_logger(), "Could not get multi echo scan. errno=%d (%s) error_count=%d",
+            urg_.last_errno, urg_error(&urg_), error_count_);
           error_count_++;
           total_error_count_++;
           device_status_ = urg_sensor_status(&urg_);
@@ -500,7 +605,9 @@ void UrgNode2::scan_thread()
             scan_freq_->tick();
           }
         } else {
-          RCLCPP_WARN(get_logger(), "Could not get single echo scan.");
+          RCLCPP_WARN(
+            get_logger(), "Could not get single echo scan. errno=%d (%s) error_count=%d",
+            urg_.last_errno, urg_error(&urg_), error_count_);
           error_count_++;
           total_error_count_++;
           device_status_ = urg_sensor_status(&urg_);
