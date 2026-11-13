@@ -568,9 +568,6 @@ void UrgNode2::scan_thread()
     is_measurement_started_ = true;
     error_count_ = 0;
 
-    rclcpp::Clock system_clock(RCL_SYSTEM_TIME);
-    rclcpp::Time prev_time = system_clock.now();
-
     while (!close_thread_) {
       // Inactive状態判定
       rclcpp_lifecycle::State state = get_current_state();
@@ -580,9 +577,11 @@ void UrgNode2::scan_thread()
         break;
       }
 
+      bool scan_ok = false;
       if (use_multiecho_) {
         sensor_msgs::msg::MultiEchoLaserScan msg;
-        if (create_scan_message(msg)) {
+        scan_ok = create_scan_message(msg);
+        if (scan_ok) {
           echo_pub_->publish(msg);
           if (echo_freq_) {
             echo_freq_->tick();
@@ -591,7 +590,6 @@ void UrgNode2::scan_thread()
           RCLCPP_WARN(
             get_logger(), "Could not get multi echo scan. errno=%d (%s) error_count=%d",
             urg_.last_errno, urg_error(&urg_), error_count_);
-          error_count_++;
           total_error_count_++;
           device_status_ = urg_sensor_status(&urg_);
           sensor_status_ = urg_sensor_state(&urg_);
@@ -599,7 +597,8 @@ void UrgNode2::scan_thread()
         }
       } else {
         sensor_msgs::msg::LaserScan msg;
-        if (create_scan_message(msg)) {
+        scan_ok = create_scan_message(msg);
+        if (scan_ok) {
           scan_pub_->publish(msg);
           if (scan_freq_) {
             scan_freq_->tick();
@@ -608,7 +607,6 @@ void UrgNode2::scan_thread()
           RCLCPP_WARN(
             get_logger(), "Could not get single echo scan. errno=%d (%s) error_count=%d",
             urg_.last_errno, urg_error(&urg_), error_count_);
-          error_count_++;
           total_error_count_++;
           device_status_ = urg_sensor_status(&urg_);
           sensor_status_ = urg_sensor_state(&urg_);
@@ -617,21 +615,13 @@ void UrgNode2::scan_thread()
       }
 
       // エラーカウント判定
-      if (error_count_ > error_limit_) {
+      if (update_scan_error_count(scan_ok, error_limit_, error_count_)) {
         RCLCPP_ERROR(get_logger(), "Error count exceeded limit, reconnecting.");
         // 再接続処理
         is_measurement_started_ = false;
         reconnect();
         reconnect_count_++;
         break;
-      } else {
-        // エラーカウントのリセット
-        rclcpp::Time current_time = system_clock.now();
-        rclcpp::Duration period = current_time - prev_time;
-        if (period.seconds() >= error_reset_period_) {
-          prev_time = current_time;
-          error_count_ = 0;
-        }
       }
     }
   }

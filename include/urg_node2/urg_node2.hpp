@@ -60,6 +60,20 @@ using namespace std::chrono_literals;
 namespace urg_node2
 {
 
+/**
+ * スキャン取得結果を連続失敗回数 error_count に反映し、error_limit を超えたら true（要再接続）を返す。
+ * 1 回の失敗が遅くても再接続に届くよう、回数は経過時間では戻さず取得成功時だけ 0 に戻す
+ */
+inline bool update_scan_error_count(bool scan_ok, int error_limit, int & error_count)
+{
+  if (scan_ok) {
+    error_count = 0;
+    return false;
+  }
+  ++error_count;
+  return error_count > error_limit;
+}
+
 class UrgNode2 : public rclcpp_lifecycle::LifecycleNode
 {
 public:
@@ -343,7 +357,7 @@ private:
   bool publish_multiecho_;
   /** パラメータ"error_limit" : 再接続を行うエラー回数 */
   int error_limit_;
-  /** パラメータ"error_reset_period" : エラーをリセットする期間 */
+  /** パラメータ"error_reset_period" : 既存設定との互換のため宣言のみ。動作には影響しない */
   double error_reset_period_;
   /** パラメータ"diagnostics_tollerance" : Diagnositcs許容範囲 */
   double diagnostics_tolerance_;
@@ -376,7 +390,7 @@ private:
   /** 計測モード [URG_DISTANCE or URG_DISTANCE_INTENSITY or URG_MULTIECHO or URG_MULTIECHO_INTENSITY] */
   urg_measurement_type_t measurement_type_;
 
-  /** 通信エラーカウンタ（再接続時にリセット） */
+  /** 連続したスキャン取得失敗の回数（取得成功時・計測開始時にリセット） */
   int error_count_;
   /** 通信エラー合計カウンタ（Active遷移時にリセット） */
   int total_error_count_;

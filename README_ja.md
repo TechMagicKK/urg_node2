@@ -76,12 +76,11 @@ urg_libray C言語APIのライセンスは`Simplified BSD License`です。
   このフラグがtrueの場合、マルチエコースキャンデータ（/echoes, /first, /last, /most_intense）が出力され、falseの場合、スキャンデータ（/scan）が出力されます。  
   LiDARがマルチエコーに対応していない場合は、false設定と同様に動作します。
 - error_limit (int, default: 4 [回])  
-  再接続を実施するエラー回数  
-  データ取得の際に発生したエラー回数がerror_limitより大きくなった場合にLiDARとの接続を再接続します。  
+  再接続を実施する連続エラー回数  
+  データ取得に連続して失敗した回数がerror_limitより大きくなった場合にLiDARとの接続を再接続します。  
+  回数はスキャンデータの取得に成功するたびに0へ戻るため、取得成功の合間に起きる散発的なエラーでは再接続しません。
 - error_reset_period (double, default: 5.0 [sec])  
-  エラーのリセット周期  
-  データ取得の際に発生したエラー回数を周期的にリセットします。  
-  ※散発的なエラー発生における再接続を防止するためです。
+  未使用です。既存のパラメータファイルとの互換のため受け付けますが、動作には影響しません。
 - diagnostics_tolerance (double, default: 0.05)  
   スキャンデータの配信頻度に関する診断情報（Diagnostics）の目標配信頻度に対しての許容割合  
   ※例えばdiagnostics_toleranceが0.05であれば、目標配信頻度の105%～95%の範囲が正常範囲となります。
