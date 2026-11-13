@@ -76,12 +76,11 @@ The urg_libray C API is licensed under the `Simplified BSD License`.
   If this flag is true, multi-echo scan data (/echoes, /first, /last, /most_intense) is output; if false, scan data (/scan) is output.  
   If LiDAR does not support multi-echo, it works the same as the false setting.
 - error_limit (int, default: 4 [count])  
-  Number of errors to perform reconnection
-  Reconnects the connection with LiDAR when the number of errors that occurred during data acquisition becomes larger than error_limit.    
+  Number of consecutive errors to perform reconnection  
+  Reconnects the connection with LiDAR when the number of consecutive data acquisition failures becomes larger than error_limit.  
+  The count is reset to 0 each time scan data is acquired successfully, so sporadic errors between successful scans do not cause reconnection.
 - error_reset_period (double, default: 5.0 [sec])  
-  Error reset cycle 
-  Periodically resets the number of errors that occurred during data acquisition.  
-  ※To prevent reconnection in case of sporadic errors
+  Unused. It is still accepted for compatibility with existing parameter files, but has no effect.
 - diagnostics_tolerance (double, default: 0.05)  
   Allowable percentage of diagnostic information on frequency of scan data delivery relative to target delivery frequency  
   ※For example, if diagnostics_tolerance is 0.05, the normal range is 105% to 95% of the target delivery frequency.
