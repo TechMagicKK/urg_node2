@@ -67,6 +67,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(scan_error_count_test test/scan_error_count_test.cpp TIMEOUT 30)
   ament_target_dependencies(scan_error_count_test rclcpp rclcpp_lifecycle sensor_msgs diagnostic_updater laser_proc)
+
+  ament_add_gtest(unstable_status_recheck_test test/unstable_status_recheck_test.cpp TIMEOUT 30)
+  ament_target_dependencies(unstable_status_recheck_test rclcpp rclcpp_lifecycle sensor_msgs diagnostic_updater laser_proc)
 endif()
 
 # disable tool tests, because a lot of errors occur in urg_library

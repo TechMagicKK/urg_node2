@@ -518,6 +518,10 @@ void UrgNode2::reconnect()
 void UrgNode2::scan_thread()
 {
   reconnect_count_ = 0;
+  // 異常状態の読み直しのために計測を止めた直後の再開かどうか
+  bool is_recheck_restart = false;
+  // 異常が続く間の読み直しを WARN で知らせ済みかどうか
+  bool is_recheck_warned = false;
 
   while (!close_thread_) {
     if (!is_connected_) {
@@ -530,6 +534,8 @@ void UrgNode2::scan_thread()
     // Inactive状態判定
     rclcpp_lifecycle::State state = get_current_state();
     if (state.label() == "inactive") {
+      is_recheck_restart = false;
+      is_recheck_warned = false;
       is_stable_ = urg_is_stable(&urg_);
       if (!is_stable_) {
         // 再接続処理
@@ -543,8 +549,10 @@ void UrgNode2::scan_thread()
     // スキャン設定
     set_scan_parameter();
 
-    // 調整モード
-    if (calibrate_time_) {
+    // 調整モード（読み直しでの再開時は数秒かかる調整でスキャンを途切れさせないよう省く）
+    const bool was_recheck_restart = is_recheck_restart;
+    is_recheck_restart = false;
+    if (calibrate_time_ && !was_recheck_restart) {
       calibrate_system_latency(URG_NODE2_CALIBRATION_MEASUREMENT_TIME);
     }
 
@@ -552,6 +560,12 @@ void UrgNode2::scan_thread()
     device_status_ = urg_sensor_status(&urg_);
     sensor_status_ = urg_sensor_state(&urg_);
     is_stable_ = urg_is_stable(&urg_);
+    if (is_stable_) {
+      if (was_recheck_restart) {
+        RCLCPP_INFO(get_logger(), "Sensor status recovered: %s", device_status_.c_str());
+      }
+      is_recheck_warned = false;
+    }
 
     // 計測開始
     int ret = urg_start_measurement(&urg_, measurement_type_, 0, skip_, 0);
@@ -567,6 +581,7 @@ void UrgNode2::scan_thread()
 
     is_measurement_started_ = true;
     error_count_ = 0;
+    const auto measurement_start_time = std::chrono::steady_clock::now();
 
     while (!close_thread_) {
       // Inactive状態判定
@@ -621,6 +636,34 @@ void UrgNode2::scan_thread()
         is_measurement_started_ = false;
         reconnect();
         reconnect_count_++;
+        break;
+      }
+
+      // 異常状態の読み直し（起動直後の初期化中などはスキャンが届いても状態が更新されないため）
+      if (should_recheck_unstable_status(
+          scan_ok, is_stable_, std::chrono::steady_clock::now() - measurement_start_time,
+          kUnstableStatusRecheckInterval))
+      {
+        // 異常が続く間の計測の止め直しは 1 回目だけ WARN で知らせ、以降はログを埋めないよう DEBUG にする
+        if (!is_recheck_warned) {
+          RCLCPP_WARN(
+            get_logger(), "Sensor status abnormal, rechecking every %lld ms: %s",
+            static_cast<long long>(kUnstableStatusRecheckInterval.count()), device_status_.c_str());
+          is_recheck_warned = true;
+        } else {
+          RCLCPP_DEBUG(get_logger(), "Rechecking sensor status: %s", device_status_.c_str());
+        }
+        is_measurement_started_ = false;
+        if (urg_stop_measurement(&urg_) < 0) {
+          // 停止できないまま II を送ると計測データと応答が混ざるため、通常の失敗と同じく再接続する
+          RCLCPP_WARN(
+            get_logger(), "Could not stop Hokuyo measurement for status recheck\n%s",
+            urg_error(&urg_));
+          reconnect();
+          reconnect_count_++;
+          break;
+        }
+        is_recheck_restart = true;
         break;
       }
     }
