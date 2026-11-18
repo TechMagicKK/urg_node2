@@ -74,6 +74,24 @@ inline bool update_scan_error_count(bool scan_ok, int error_limit, int & error_c
   return error_count > error_limit;
 }
 
+/**
+ * 計測中に異常状態のままのとき、状態を読み直す間隔。読み直しは計測を止めて行い 1 回で数スキャン欠けるため、
+ * 欠けを数 % に抑えつつ、復帰後の異常表示が数秒で解ける値にしている
+ */
+constexpr std::chrono::milliseconds kUnstableStatusRecheckInterval{5000};
+
+/**
+ * 計測開始から interval 以上経ち、スキャン取得に成功しているのに状態が異常なら true（計測を止めて読み直す）を返す。
+ * 取得失敗時に計測中のまま読んだ状態は当てにならないため、異常を見た時点からは計時せず次の成功で読み直す。
+ * II は計測中に使えないため止めて読む。取得失敗中は再接続判定(error_limit)に任せ、ここでは止めない
+ */
+inline bool should_recheck_unstable_status(
+  bool scan_ok, bool is_stable, std::chrono::steady_clock::duration elapsed,
+  std::chrono::steady_clock::duration interval)
+{
+  return scan_ok && !is_stable && elapsed >= interval;
+}
+
 class UrgNode2 : public rclcpp_lifecycle::LifecycleNode
 {
 public:
