@@ -81,7 +81,8 @@ inline bool update_scan_error_count(bool scan_ok, int error_limit, int & error_c
 constexpr std::chrono::milliseconds kUnstableStatusRecheckInterval{5000};
 
 /**
- * スキャン取得に成功しているのに状態が異常のまま interval 経過したら true（計測を止めて読み直す）を返す。
+ * 計測開始から interval 以上経ち、スキャン取得に成功しているのに状態が異常なら true（計測を止めて読み直す）を返す。
+ * 取得失敗時に計測中のまま読んだ状態は当てにならないため、異常を見た時点からは計時せず次の成功で読み直す。
  * II は計測中に使えないため止めて読む。取得失敗中は再接続判定(error_limit)に任せ、ここでは止めない
  */
 inline bool should_recheck_unstable_status(
